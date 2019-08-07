@@ -24,7 +24,6 @@ import com.google.common.base.Throwables;
 import com.google.inject.Inject;
 import org.apache.druid.concurrent.ConcurrentAwaitableCounter;
 import org.apache.druid.guice.LazySingleton;
-import org.apache.druid.java.util.common.Cleaners;
 import org.apache.druid.java.util.common.ISE;
 import org.apache.druid.java.util.common.StringUtils;
 import org.apache.druid.java.util.common.logger.Logger;
@@ -32,11 +31,13 @@ import org.apache.druid.java.util.emitter.service.ServiceEmitter;
 import org.apache.druid.java.util.emitter.service.ServiceMetricEvent;
 import org.apache.druid.query.lookup.namespace.CacheGenerator;
 import org.apache.druid.query.lookup.namespace.ExtractionNamespace;
+import sun.misc.Cleaner;
 
 import javax.annotation.Nullable;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -138,8 +139,8 @@ public final class CacheScheduler
   /**
    * This class effectively contains the whole state and most of the logic of {@link Entry}, need to be a separate class
    * because the Entry must not be referenced from the runnable executed in {@link #cacheManager}'s ExecutorService,
-   * that would be a leak preventing the Entry to be collected by GC, and therefore {@link #entryCleanable} to be run by
-   * the JVM. Also, {@link #entryCleanable} must not reference the Entry through it's Runnable hunk.
+   * that would be a leak preventing the Entry to be collected by GC, and therefore {@link #entryCleaner} to be run by
+   * the JVM. Also, {@link #entryCleaner} must not reference the Entry through it's Runnable hunk.
    */
   public class EntryImpl<T extends ExtractionNamespace> implements AutoCloseable
   {
@@ -147,7 +148,7 @@ public final class CacheScheduler
     private final String asString;
     private final AtomicReference<CacheState> cacheStateHolder = new AtomicReference<CacheState>(NoCache.CACHE_NOT_INITIALIZED);
     private final Future<?> updaterFuture;
-    private final Cleaners.Cleanable entryCleanable;
+    private final Cleaner entryCleaner;
     private final CacheGenerator<T> cacheGenerator;
     private final ConcurrentAwaitableCounter updateCounter = new ConcurrentAwaitableCounter();
     private final CountDownLatch startLatch = new CountDownLatch(1);
@@ -158,7 +159,7 @@ public final class CacheScheduler
         this.namespace = namespace;
         this.asString = StringUtils.format("namespace [%s] : %s", namespace, super.toString());
         this.updaterFuture = schedule(namespace);
-        this.entryCleanable = createCleaner(entry);
+        this.entryCleaner = createCleaner(entry);
         this.cacheGenerator = cacheGenerator;
         activeEntries.incrementAndGet();
       }
@@ -167,9 +168,9 @@ public final class CacheScheduler
       }
     }
 
-    private Cleaners.Cleanable createCleaner(Entry<T> entry)
+    private Cleaner createCleaner(Entry<T> entry)
     {
-      return Cleaners.register(entry, new Runnable()
+      return Cleaner.create(entry, new Runnable()
       {
         @Override
         public void run()
@@ -195,6 +196,15 @@ public final class CacheScheduler
       } else {
         return cacheManager.scheduledExecutorService().schedule(command, 0, TimeUnit.MILLISECONDS);
       }
+    }
+
+    public VersionedCache createFromExisitngCache(@Nullable EntryImpl<? extends ExtractionNamespace> entryId,
+                                    String version,
+                                    ConcurrentMap<String, String> newCacheEntries)
+    {
+      VersionedCache state = (VersionedCache) cacheStateHolder.get();
+      state.cacheHandler.getCache().putAll(newCacheEntries);
+      return createVersionedCache(entryId, version, state.cacheHandler.getCache());
     }
 
     private void updateCache()
@@ -275,6 +285,7 @@ public final class CacheScheduler
       CacheState lastCacheState;
       // CAS loop
       do {
+
         lastCacheState = cacheStateHolder.get();
         if (lastCacheState == NoCache.ENTRY_CLOSED) {
           return lastCacheState;
@@ -290,10 +301,10 @@ public final class CacheScheduler
       if (!doClose(true)) {
         log.error("Cache for %s has already been closed", this);
       }
-      // This clean() call effectively just removes the object from the internal linked list of all cleanables.
+      // This Cleaner.clean() call effectively just removes the Cleaner from the internal linked list of all cleaners.
       // It will delegate to closeFromCleaner() which will be a no-op because cacheStateHolder is already set to
       // ENTRY_CLOSED.
-      entryCleanable.clean();
+      entryCleaner.clean();
     }
 
     private void closeFromCleaner()
@@ -311,7 +322,7 @@ public final class CacheScheduler
           t.addSuppressed(e);
         }
         Throwables.propagateIfInstanceOf(t, Error.class);
-        // Must not throw exceptions in the cleaner thread, possibly run by the JVM.
+        // Must not throw exceptions in the cleaner thread, run by the JVM.
       }
     }
 
@@ -394,6 +405,13 @@ public final class CacheScheduler
       this.version = version;
     }
 
+    private VersionedCache(String entryId, String version, ConcurrentMap<String, String> cache)
+    {
+      this.entryId = entryId;
+      this.cacheHandler = cacheManager.createCache(cache);
+      this.version = version;
+    }
+
     public Map<String, String> getCache()
     {
       return cacheHandler.getCache();
@@ -470,6 +488,14 @@ public final class CacheScheduler
   {
     updatesStarted.incrementAndGet();
     return new VersionedCache(String.valueOf(entryId), version);
+  }
+
+  public VersionedCache createVersionedCache(@Nullable EntryImpl<? extends ExtractionNamespace> entryId,
+                                             String version,
+                                             ConcurrentMap<String, String> cache)
+  {
+    updatesStarted.incrementAndGet();
+    return new VersionedCache(String.valueOf(entryId), version, cache);
   }
 
   @VisibleForTesting

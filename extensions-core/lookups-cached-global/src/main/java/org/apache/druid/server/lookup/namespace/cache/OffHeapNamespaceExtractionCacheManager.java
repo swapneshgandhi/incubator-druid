@@ -21,7 +21,6 @@ package org.apache.druid.server.lookup.namespace.cache;
 
 import com.google.common.base.Throwables;
 import com.google.inject.Inject;
-import org.apache.druid.java.util.common.Cleaners;
 import org.apache.druid.java.util.common.lifecycle.Lifecycle;
 import org.apache.druid.java.util.common.logger.Logger;
 import org.apache.druid.java.util.emitter.service.ServiceEmitter;
@@ -30,6 +29,7 @@ import org.apache.druid.server.lookup.namespace.NamespaceExtractionConfig;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.mapdb.HTreeMap;
+import sun.misc.Cleaner;
 
 import java.io.File;
 import java.io.IOException;
@@ -54,9 +54,9 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
      *
      * <p>In case of actual race, we don't wait in those methods until the other one, which manages to switch this flag
      * first, completes. This could result into the situation that neither one completes, if the JVM is shutting down
-     * and the thread from which {@link Cleaners.Cleanable#clean()} (delegating to {@link #run()}) is called started the disposal
+     * and the thread from which {@link Cleaner#clean()} (delegating to {@link #run()}) is called started the disposal
      * operation, then more deterministic shutdown hook / lifecycle.stop(), which may call {@link #disposeManually()}
-     * completed early, and then the whole process shuts down before {@link Cleaners.Cleanable#clean()} completes, because shutdown
+     * completed early, and then the whole process shuts down before {@link Cleaner#clean()} completes, because shutdown
      * is not blocked by it. However this should be harmless because anyway we remove the whole MapDB's file in
      * lifecycle.stop() (see {@link OffHeapNamespaceExtractionCacheManager#OffHeapNamespaceExtractionCacheManager}).
      * However if we persist off-heap DB between JVM runs, this decision should be revised.
@@ -69,7 +69,7 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
     }
 
     /**
-     * To be called by the JVM via {@link Cleaners.Cleanable#clean()}. The only difference from {@link #disposeManually()} is
+     * To be called by the JVM via {@link Cleaner#clean()}. The only difference from {@link #disposeManually()} is
      * exception treatment.
      */
     @Override
@@ -89,7 +89,7 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
             t.addSuppressed(e);
           }
           Throwables.propagateIfInstanceOf(t, Error.class);
-          // Must not throw exceptions in the cleaner thread, possibly run in the JVM.
+          // Must not throw exceptions in the cleaner thread, run by the JVM.
         }
       }
     }
@@ -118,12 +118,12 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
   private static class MapDbCacheDisposerAndCleaner
   {
     final MapDbCacheDisposer cacheDisposer;
-    final Cleaners.Cleanable cleanable;
+    final Cleaner cleaner;
 
-    private MapDbCacheDisposerAndCleaner(MapDbCacheDisposer cacheDisposer, Cleaners.Cleanable cleanable)
+    private MapDbCacheDisposerAndCleaner(MapDbCacheDisposer cacheDisposer, Cleaner cleaner)
     {
       this.cacheDisposer = cacheDisposer;
-      this.cleanable = cleanable;
+      this.cleaner = cleaner;
     }
   }
 
@@ -141,7 +141,7 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
   {
     super(lifecycle, serviceEmitter, config);
     try {
-      tmpFile = File.createTempFile("druidMapDB", getClass().getName());
+      tmpFile = File.createTempFile("druidMapDB", getClass().getCanonicalName());
       log.info("Using file [%s] for mapDB off heap namespace cache", tmpFile.getAbsolutePath());
     }
     catch (IOException e) {
@@ -187,6 +187,13 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
   }
 
   @Override
+  public CacheHandler createCache(ConcurrentMap<String, String> cache)
+  {
+    // this method is not supported for offHeap, but it's here to have consistent interface for NamespaceExtractionCacheManager.
+    return createCache();
+  }
+
+  @Override
   public CacheHandler createCache()
   {
     ConcurrentMap<String, String> cache;
@@ -196,8 +203,8 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
       mapDbKey = Long.toString(mapDbKeyCounter.getAndIncrement());
       try {
         HTreeMap<String, String> hTreeMap = mmapDB.createHashMap(mapDbKey).make();
-        // Access MapDB's HTreeMap and create a cleanable via proxy, because there is no 100% confidence that there are
-        // no memory leaks in MapDB and in OffHeapCacheManager. Otherwise JVM will never be able to clean the cleanable
+        // Access MapDB's HTreeMap and create a cleaner via proxy, because there is no 100% confidence that there are
+        // no memory leaks in MapDB and in OffHeapCacheManager. Otherwise JVM will never be able to clean the cleaner
         // and dispose leaked cache.
         cache = new CacheProxy(hTreeMap);
         cacheCount.incrementAndGet();
@@ -211,10 +218,10 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
     // Cleaner is "the second level of defence". Normally all users of createCache() must call disposeCache() with
     // the returned CacheHandler instance manually. But if they don't do this for whatever reason, JVM will cleanup
     // the cache itself.
-    Cleaners.Cleanable cleanable = Cleaners.register(cache, cacheDisposer);
+    Cleaner cleaner = Cleaner.create(cache, cacheDisposer);
     MapDbCacheDisposerAndCleaner disposerAndCleaner = new MapDbCacheDisposerAndCleaner(
         cacheDisposer,
-        cleanable
+        cleaner
     );
     return new CacheHandler(this, cache, disposerAndCleaner);
   }
@@ -226,7 +233,7 @@ public class OffHeapNamespaceExtractionCacheManager extends NamespaceExtractionC
     disposerAndCleaner.cacheDisposer.disposeManually();
     // This clean() call effectively just removes the Cleaner from the internal linked list of all cleaners.
     // The thunk.run() will be a no-op because cacheDisposer.disposed is already set to true.
-    disposerAndCleaner.cleanable.clean();
+    disposerAndCleaner.cleaner.clean();
   }
 
   @Override
