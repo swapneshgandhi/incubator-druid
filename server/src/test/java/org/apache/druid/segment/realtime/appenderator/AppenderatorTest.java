@@ -37,6 +37,9 @@ import org.apache.druid.query.QueryPlus;
 import org.apache.druid.query.Result;
 import org.apache.druid.query.SegmentDescriptor;
 import org.apache.druid.query.aggregation.LongSumAggregatorFactory;
+import org.apache.druid.query.context.ResponseContext;
+import org.apache.druid.query.scan.ScanQuery;
+import org.apache.druid.query.scan.ScanResultValue;
 import org.apache.druid.query.spec.MultipleSpecificSegmentSpec;
 import org.apache.druid.query.timeseries.TimeseriesQuery;
 import org.apache.druid.query.timeseries.TimeseriesResultValue;
@@ -117,17 +120,17 @@ public class AppenderatorTest
       Assert.assertTrue(thrown);
 
       // push all
-      final SegmentsAndMetadata segmentsAndMetadata = appenderator.push(
+      final SegmentsAndCommitMetadata segmentsAndCommitMetadata = appenderator.push(
           appenderator.getSegments(),
           committerSupplier.get(),
           false
       ).get();
-      Assert.assertEquals(ImmutableMap.of("x", "3"), (Map<String, String>) segmentsAndMetadata.getCommitMetadata());
+      Assert.assertEquals(ImmutableMap.of("x", "3"), (Map<String, String>) segmentsAndCommitMetadata.getCommitMetadata());
       Assert.assertEquals(
           IDENTIFIERS.subList(0, 2),
           sorted(
               Lists.transform(
-                  segmentsAndMetadata.getSegments(),
+                  segmentsAndCommitMetadata.getSegments(),
                   new Function<DataSegment, SegmentIdWithShardSpec>()
                   {
                     @Override
@@ -139,7 +142,7 @@ public class AppenderatorTest
               )
           )
       );
-      Assert.assertEquals(sorted(tester.getPushedSegments()), sorted(segmentsAndMetadata.getSegments()));
+      Assert.assertEquals(sorted(tester.getPushedSegments()), sorted(segmentsAndCommitMetadata.getSegments()));
 
       // clear
       appenderator.clear();
@@ -505,7 +508,7 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results1 =
-          QueryPlus.wrap(query1).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query1).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
           "query1",
           ImmutableList.of(
@@ -531,7 +534,7 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results2 =
-          QueryPlus.wrap(query2).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query2).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
           "query2",
           ImmutableList.of(
@@ -561,7 +564,7 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results3 =
-          QueryPlus.wrap(query3).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query3).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
           ImmutableList.of(
               new Result<>(
@@ -595,7 +598,7 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results4 =
-          QueryPlus.wrap(query4).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query4).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
           ImmutableList.of(
               new Result<>(
@@ -651,7 +654,7 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results1 =
-          QueryPlus.wrap(query1).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query1).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
           "query1",
           ImmutableList.of(
@@ -687,7 +690,7 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results2 =
-          QueryPlus.wrap(query2).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query2).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
           "query2",
           ImmutableList.of(
@@ -728,9 +731,9 @@ public class AppenderatorTest
                                            .build();
 
       final List<Result<TimeseriesResultValue>> results3 =
-          QueryPlus.wrap(query3).run(appenderator, ImmutableMap.of()).toList();
+          QueryPlus.wrap(query3).run(appenderator, ResponseContext.createEmpty()).toList();
       Assert.assertEquals(
-          "query2",
+          "query3",
           ImmutableList.of(
               new Result<>(
                   DateTimes.of("2001"),
@@ -738,6 +741,42 @@ public class AppenderatorTest
               )
           ),
           results3
+      );
+
+      final ScanQuery query4 = Druids.newScanQueryBuilder()
+                                     .dataSource(AppenderatorTester.DATASOURCE)
+                                     .intervals(
+                                         new MultipleSpecificSegmentSpec(
+                                             ImmutableList.of(
+                                                 new SegmentDescriptor(
+                                                     Intervals.of("2001/PT1H"),
+                                                     IDENTIFIERS.get(2).getVersion(),
+                                                     IDENTIFIERS.get(2).getShardSpec().getPartitionNum()
+                                                 ),
+                                                 new SegmentDescriptor(
+                                                     Intervals.of("2001T03/PT1H"),
+                                                     IDENTIFIERS.get(2).getVersion(),
+                                                     IDENTIFIERS.get(2).getShardSpec().getPartitionNum()
+                                                 )
+                                             )
+                                         )
+                                     )
+                                     .order(ScanQuery.Order.ASCENDING)
+                                     .batchSize(10)
+                                     .resultFormat(ScanQuery.ResultFormat.RESULT_FORMAT_COMPACTED_LIST)
+                                     .build();
+      final List<ScanResultValue> results4 =
+          QueryPlus.wrap(query4).run(appenderator, ResponseContext.createEmpty()).toList();
+      Assert.assertEquals(2, results4.size()); // 2 segments, 1 row per segment
+      Assert.assertArrayEquals(new String[]{"__time", "dim", "count", "met"}, results4.get(0).getColumns().toArray());
+      Assert.assertArrayEquals(
+          new Object[]{DateTimes.of("2001").getMillis(), "foo", 1L, 8L},
+          ((List<Object>) ((List<Object>) results4.get(0).getEvents()).get(0)).toArray()
+      );
+      Assert.assertArrayEquals(new String[]{"__time", "dim", "count", "met"}, results4.get(0).getColumns().toArray());
+      Assert.assertArrayEquals(
+          new Object[]{DateTimes.of("2001T03").getMillis(), "foo", 1L, 64L},
+          ((List<Object>) ((List<Object>) results4.get(1).getEvents()).get(0)).toArray()
       );
     }
   }

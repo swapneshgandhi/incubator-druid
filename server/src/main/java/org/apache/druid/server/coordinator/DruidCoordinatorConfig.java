@@ -57,12 +57,6 @@ public abstract class DruidCoordinatorConfig
     return new Duration(15 * 60 * 1000);
   }
 
-  @Config("druid.coordinator.console.static")
-  public String getConsoleStatic()
-  {
-    return null;
-  }
-
   @Config("druid.coordinator.loadqueuepeon.repeatDelay")
   public Duration getLoadQueuePeonRepeatDelay()
   {
@@ -73,6 +67,12 @@ public abstract class DruidCoordinatorConfig
   public String getLoadQueuePeonType()
   {
     return "curator";
+  }
+
+  @Config("druid.coordinator.curator.loadqueuepeon.numCallbackThreads")
+  public int getNumCuratorCallBackThreads()
+  {
+    return 2;
   }
 
   @Config("druid.coordinator.loadqueuepeon.http.repeatDelay")

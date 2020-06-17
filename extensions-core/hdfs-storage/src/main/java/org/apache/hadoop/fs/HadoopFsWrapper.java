@@ -35,7 +35,9 @@ public class HadoopFsWrapper
 {
   private static final Logger log = new Logger(HadoopFsWrapper.class);
 
-  private HadoopFsWrapper() {}
+  private HadoopFsWrapper()
+  {
+  }
 
   /**
    * Same as FileSystem.rename(from, to, Options.Rename). It is different from FileSystem.rename(from, to) which moves
@@ -53,7 +55,7 @@ public class HadoopFsWrapper
     try {
       // Note: Using reflection instead of simpler
       // fs.rename(from, to, Options.Rename.NONE);
-      // due to the issues discussed in https://github.com/apache/incubator-druid/pull/3787
+      // due to the issues discussed in https://github.com/apache/druid/pull/3787
       Method renameMethod = findRenameMethodRecursively(fs.getClass());
       renameMethod.invoke(fs, from, to, new Options.Rename[]{Options.Rename.NONE});
       return true;

@@ -31,28 +31,18 @@ public class PlannerConfig
 {
   public static final String CTX_KEY_USE_APPROXIMATE_COUNT_DISTINCT = "useApproximateCountDistinct";
   public static final String CTX_KEY_USE_APPROXIMATE_TOPN = "useApproximateTopN";
-  public static final String CTX_KEY_USE_FALLBACK = "useFallback";
 
   @JsonProperty
   private Period metadataRefreshPeriod = new Period("PT1M");
 
   @JsonProperty
-  private int maxSemiJoinRowsInMemory = 100000;
-
-  @JsonProperty
   private int maxTopNLimit = 100000;
-
-  @JsonProperty
-  private int maxQueryCount = 8;
 
   @JsonProperty
   private boolean useApproximateCountDistinct = true;
 
   @JsonProperty
   private boolean useApproximateTopN = true;
-
-  @JsonProperty
-  private boolean useFallback = false;
 
   @JsonProperty
   private boolean requireTimeCondition = false;
@@ -86,19 +76,9 @@ public class PlannerConfig
     return metadataRefreshPeriod;
   }
 
-  public int getMaxSemiJoinRowsInMemory()
-  {
-    return maxSemiJoinRowsInMemory;
-  }
-
   public int getMaxTopNLimit()
   {
     return maxTopNLimit;
-  }
-
-  public int getMaxQueryCount()
-  {
-    return maxQueryCount;
   }
 
   public boolean isUseApproximateCountDistinct()
@@ -109,11 +89,6 @@ public class PlannerConfig
   public boolean isUseApproximateTopN()
   {
     return useApproximateTopN;
-  }
-
-  public boolean isUseFallback()
-  {
-    return useFallback;
   }
 
   public boolean isRequireTimeCondition()
@@ -144,9 +119,7 @@ public class PlannerConfig
 
     final PlannerConfig newConfig = new PlannerConfig();
     newConfig.metadataRefreshPeriod = getMetadataRefreshPeriod();
-    newConfig.maxSemiJoinRowsInMemory = getMaxSemiJoinRowsInMemory();
     newConfig.maxTopNLimit = getMaxTopNLimit();
-    newConfig.maxQueryCount = getMaxQueryCount();
     newConfig.useApproximateCountDistinct = getContextBoolean(
         context,
         CTX_KEY_USE_APPROXIMATE_COUNT_DISTINCT,
@@ -156,11 +129,6 @@ public class PlannerConfig
         context,
         CTX_KEY_USE_APPROXIMATE_TOPN,
         isUseApproximateTopN()
-    );
-    newConfig.useFallback = getContextBoolean(
-        context,
-        CTX_KEY_USE_FALLBACK,
-        isUseFallback()
     );
     newConfig.requireTimeCondition = isRequireTimeCondition();
     newConfig.sqlTimeZone = getSqlTimeZone();
@@ -199,12 +167,9 @@ public class PlannerConfig
       return false;
     }
     final PlannerConfig that = (PlannerConfig) o;
-    return maxSemiJoinRowsInMemory == that.maxSemiJoinRowsInMemory &&
-           maxTopNLimit == that.maxTopNLimit &&
-           maxQueryCount == that.maxQueryCount &&
+    return maxTopNLimit == that.maxTopNLimit &&
            useApproximateCountDistinct == that.useApproximateCountDistinct &&
            useApproximateTopN == that.useApproximateTopN &&
-           useFallback == that.useFallback &&
            requireTimeCondition == that.requireTimeCondition &&
            awaitInitializationOnStart == that.awaitInitializationOnStart &&
            metadataSegmentCacheEnable == that.metadataSegmentCacheEnable &&
@@ -220,12 +185,9 @@ public class PlannerConfig
 
     return Objects.hash(
         metadataRefreshPeriod,
-        maxSemiJoinRowsInMemory,
         maxTopNLimit,
-        maxQueryCount,
         useApproximateCountDistinct,
         useApproximateTopN,
-        useFallback,
         requireTimeCondition,
         awaitInitializationOnStart,
         sqlTimeZone,
@@ -240,12 +202,9 @@ public class PlannerConfig
   {
     return "PlannerConfig{" +
            "metadataRefreshPeriod=" + metadataRefreshPeriod +
-           ", maxSemiJoinRowsInMemory=" + maxSemiJoinRowsInMemory +
            ", maxTopNLimit=" + maxTopNLimit +
-           ", maxQueryCount=" + maxQueryCount +
            ", useApproximateCountDistinct=" + useApproximateCountDistinct +
            ", useApproximateTopN=" + useApproximateTopN +
-           ", useFallback=" + useFallback +
            ", requireTimeCondition=" + requireTimeCondition +
            ", awaitInitializationOnStart=" + awaitInitializationOnStart +
            ", metadataSegmentCacheEnable=" + metadataSegmentCacheEnable +

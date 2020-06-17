@@ -18,189 +18,294 @@
 
 import { Intent } from '@blueprintjs/core';
 import { IconNames } from '@blueprintjs/icons';
-import axios from 'axios';
-import * as classNames from 'classnames';
-import * as React from 'react';
+import classNames from 'classnames';
+import React from 'react';
 import { HashRouter, Route, Switch } from 'react-router-dom';
 
-import { HeaderActiveTab, HeaderBar } from './components/header-bar';
+import { HeaderActiveTab, HeaderBar, Loader } from './components';
 import { AppToaster } from './singletons/toaster';
-import { DRUID_DOCS_SQL, LEGACY_COORDINATOR_CONSOLE, LEGACY_OVERLORD_CONSOLE } from './variables';
-import { DatasourcesView } from './views/datasource-view';
-import { HomeView } from './views/home-view';
-import { LookupsView } from './views/lookups-view';
-import { SegmentsView } from './views/segments-view';
-import { ServersView } from './views/servers-view';
-import { SqlView } from './views/sql-view';
-import { TasksView } from './views/tasks-view';
+import { QueryManager } from './utils';
+import { Capabilities } from './utils/capabilities';
+import {
+  DatasourcesView,
+  HomeView,
+  IngestionView,
+  LoadDataView,
+  LookupsView,
+  QueryView,
+  SegmentsView,
+  ServicesView,
+} from './views';
 
 import './console-application.scss';
 
-export interface ConsoleApplicationProps extends React.Props<any> {
-  hideLegacy: boolean;
-  baseURL?: string;
-  customHeaderName?: string;
-  customHeaderValue?: string;
+export interface ConsoleApplicationProps {
+  exampleManifestsUrl?: string;
+  defaultQueryContext?: Record<string, any>;
+  mandatoryQueryContext?: Record<string, any>;
 }
 
 export interface ConsoleApplicationState {
-  aboutDialogOpen: boolean;
+  capabilities: Capabilities;
+  capabilitiesLoading: boolean;
 }
 
-export class ConsoleApplication extends React.Component<ConsoleApplicationProps, ConsoleApplicationState> {
-  static MESSAGE_KEY = 'druid-console-message';
-  static MESSAGE_DISMISSED = 'dismissed';
+export class ConsoleApplication extends React.PureComponent<
+  ConsoleApplicationProps,
+  ConsoleApplicationState
+> {
+  private capabilitiesQueryManager: QueryManager<null, Capabilities>;
 
-  static async ensureSql() {
-    try {
-      await axios.post('/druid/v2/sql', { query: 'SELECT 1337' });
-    } catch (e) {
-      const { response } = e;
-      if (response.status !== 405 || response.statusText !== 'Method Not Allowed') return true; // other failure
-      try {
-        await axios.get('/status');
-      } catch (e) {
-        return true; // total failure
-      }
-
-      // Status works but SQL 405s => the SQL endpoint is disabled
-      AppToaster.show({
-        icon: IconNames.ERROR,
-        intent: Intent.DANGER,
-        timeout: 120000,
-        /* tslint:disable:jsx-alignment */
-        message: <>
-          It appears that the SQL endpoint is disabled. Either <a
-          href={DRUID_DOCS_SQL}>enable the SQL endpoint</a> or use the old <a
-          href={LEGACY_COORDINATOR_CONSOLE}>coordinator</a> and <a
-          href={LEGACY_OVERLORD_CONSOLE}>overlord</a> consoles that do not rely on the SQL endpoint.
+  static shownNotifications() {
+    AppToaster.show({
+      icon: IconNames.ERROR,
+      intent: Intent.DANGER,
+      timeout: 120000,
+      message: (
+        <>
+          It appears that the the service serving this console is not responding. The console will
+          not function at the moment
         </>
-        /* tslint:enable:jsx-alignment */
-      });
-      return false;
-    }
-    return true;
+      ),
+    });
   }
 
-  static async shownNotifications() {
-    await ConsoleApplication.ensureSql();
-  }
-
-  private taskId: string | null;
-  private datasource: string | null;
-  private onlyUnavailable: boolean | null;
-  private initSql: string | null;
-  private middleManager: string | null;
+  private supervisorId?: string;
+  private taskId?: string;
+  private taskGroupId?: string;
+  private openDialog?: string;
+  private datasource?: string;
+  private onlyUnavailable?: boolean;
+  private initQuery?: string;
+  private middleManager?: string;
 
   constructor(props: ConsoleApplicationProps, context: any) {
     super(props, context);
     this.state = {
-      aboutDialogOpen: false
+      capabilities: Capabilities.FULL,
+      capabilitiesLoading: true,
     };
 
-    if (props.baseURL) {
-      axios.defaults.baseURL = props.baseURL;
-    }
-    if (props.customHeaderName && props.customHeaderValue) {
-      axios.defaults.headers.common[props.customHeaderName] = props.customHeaderValue;
-    }
+    this.capabilitiesQueryManager = new QueryManager({
+      processQuery: async () => {
+        const capabilities = await Capabilities.detectCapabilities();
+        if (!capabilities) ConsoleApplication.shownNotifications();
+        return capabilities || Capabilities.FULL;
+      },
+      onStateChange: ({ result, loading }) => {
+        this.setState({
+          capabilities: result || Capabilities.FULL,
+          capabilitiesLoading: loading,
+        });
+      },
+    });
   }
 
   componentDidMount(): void {
-    ConsoleApplication.shownNotifications();
+    this.capabilitiesQueryManager.runQuery(null);
   }
 
-  private resetInitialsDelay() {
+  componentWillUnmount(): void {
+    this.capabilitiesQueryManager.terminate();
+  }
+
+  private resetInitialsWithDelay() {
     setTimeout(() => {
-      this.taskId = null;
-      this.datasource = null;
-      this.onlyUnavailable = null;
-      this.initSql = null;
-      this.middleManager = null;
+      this.taskId = undefined;
+      this.taskGroupId = undefined;
+      this.supervisorId = undefined;
+      this.openDialog = undefined;
+      this.datasource = undefined;
+      this.onlyUnavailable = undefined;
+      this.initQuery = undefined;
+      this.middleManager = undefined;
     }, 50);
   }
 
-  private goToTask = (taskId: string) => {
-    this.taskId = taskId;
-    window.location.hash = 'tasks';
-    this.resetInitialsDelay();
-  }
+  private goToLoadData = (supervisorId?: string, taskId?: string) => {
+    if (taskId) this.taskId = taskId;
+    if (supervisorId) this.supervisorId = supervisorId;
+    window.location.hash = 'load-data';
+    this.resetInitialsWithDelay();
+  };
+
+  private goToDatasources = (datasource: string) => {
+    this.datasource = datasource;
+    window.location.hash = 'datasources';
+    this.resetInitialsWithDelay();
+  };
 
   private goToSegments = (datasource: string, onlyUnavailable = false) => {
     this.datasource = datasource;
     this.onlyUnavailable = onlyUnavailable;
     window.location.hash = 'segments';
-    this.resetInitialsDelay();
-  }
+    this.resetInitialsWithDelay();
+  };
+
+  private goToIngestionWithTaskGroupId = (taskGroupId?: string, openDialog?: string) => {
+    this.taskGroupId = taskGroupId;
+    if (openDialog) this.openDialog = openDialog;
+    window.location.hash = 'ingestion';
+    this.resetInitialsWithDelay();
+  };
+
+  private goToIngestionWithDatasource = (datasource?: string, openDialog?: string) => {
+    this.datasource = datasource;
+    if (openDialog) this.openDialog = openDialog;
+    window.location.hash = 'ingestion';
+    this.resetInitialsWithDelay();
+  };
 
   private goToMiddleManager = (middleManager: string) => {
     this.middleManager = middleManager;
-    window.location.hash = 'servers';
-    this.resetInitialsDelay();
-  }
+    window.location.hash = 'services';
+    this.resetInitialsWithDelay();
+  };
 
-  private goToSql = (initSql: string) => {
-    this.initSql = initSql;
-    window.location.hash = 'sql';
-    this.resetInitialsDelay();
-  }
+  private goToQuery = (initQuery: string) => {
+    this.initQuery = initQuery;
+    window.location.hash = 'query';
+    this.resetInitialsWithDelay();
+  };
 
-  render() {
-    const { hideLegacy } = this.props;
+  private wrapInViewContainer = (
+    active: HeaderActiveTab,
+    el: JSX.Element,
+    classType: 'normal' | 'narrow-pad' = 'normal',
+  ) => {
+    const { capabilities } = this.state;
 
-    const wrapInViewContainer = (active: HeaderActiveTab, el: JSX.Element, scrollable = false) => {
-      return <>
-        <HeaderBar active={active} hideLegacy={hideLegacy}/>
-        <div className={classNames('view-container', { scrollable })}>{el}</div>
-      </>;
-    };
+    return (
+      <>
+        <HeaderBar active={active} capabilities={capabilities} />
+        <div className={classNames('view-container', classType)}>{el}</div>
+      </>
+    );
+  };
 
-    return <HashRouter hashType="noslash">
-      <div className="console-application">
-        <Switch>
-          <Route
-            path="/datasources"
-            component={() => {
-              return wrapInViewContainer('datasources', <DatasourcesView goToSql={this.goToSql} goToSegments={this.goToSegments}/>);
-            }}
-          />
-          <Route
-            path="/segments"
-            component={() => {
-              return wrapInViewContainer('segments', <SegmentsView datasource={this.datasource} onlyUnavailable={this.onlyUnavailable} goToSql={this.goToSql}/>);
-            }}
-          />
-          <Route
-            path="/tasks"
-            component={() => {
-              return wrapInViewContainer('tasks', <TasksView taskId={this.taskId} goToSql={this.goToSql} goToMiddleManager={this.goToMiddleManager}/>, true);
-            }}
-          />
-          <Route
-            path="/servers"
-            component={() => {
-              return wrapInViewContainer('servers', <ServersView middleManager={this.middleManager} goToSql={this.goToSql} goToTask={this.goToTask}/>, true);
-            }}
-          />
-          <Route
-            path="/sql"
-            component={() => {
-              return wrapInViewContainer('sql', <SqlView initSql={this.initSql}/>);
-            }}
-          />
-          <Route
-            path="/lookups"
-            component={() => {
-              return wrapInViewContainer('lookups', <LookupsView />);
-            }}
-          />
-          <Route
-            component={() => {
-              return wrapInViewContainer(null, <HomeView/>);
-            }}
-          />
-        </Switch>
-      </div>
-    </HashRouter>;
+  private wrappedHomeView = () => {
+    const { capabilities } = this.state;
+    return this.wrapInViewContainer(null, <HomeView capabilities={capabilities} />);
+  };
+
+  private wrappedLoadDataView = () => {
+    const { exampleManifestsUrl } = this.props;
+
+    return this.wrapInViewContainer(
+      'load-data',
+      <LoadDataView
+        initSupervisorId={this.supervisorId}
+        initTaskId={this.taskId}
+        exampleManifestsUrl={exampleManifestsUrl}
+        goToIngestion={this.goToIngestionWithTaskGroupId}
+      />,
+      'narrow-pad',
+    );
+  };
+
+  private wrappedQueryView = () => {
+    const { defaultQueryContext, mandatoryQueryContext } = this.props;
+
+    return this.wrapInViewContainer(
+      'query',
+      <QueryView
+        initQuery={this.initQuery}
+        defaultQueryContext={defaultQueryContext}
+        mandatoryQueryContext={mandatoryQueryContext}
+      />,
+    );
+  };
+
+  private wrappedDatasourcesView = () => {
+    const { capabilities } = this.state;
+    return this.wrapInViewContainer(
+      'datasources',
+      <DatasourcesView
+        initDatasource={this.datasource}
+        goToQuery={this.goToQuery}
+        goToTask={this.goToIngestionWithDatasource}
+        goToSegments={this.goToSegments}
+        capabilities={capabilities}
+      />,
+    );
+  };
+
+  private wrappedSegmentsView = () => {
+    const { capabilities } = this.state;
+    return this.wrapInViewContainer(
+      'segments',
+      <SegmentsView
+        datasource={this.datasource}
+        onlyUnavailable={this.onlyUnavailable}
+        goToQuery={this.goToQuery}
+        capabilities={capabilities}
+      />,
+    );
+  };
+
+  private wrappedIngestionView = () => {
+    const { capabilities } = this.state;
+    return this.wrapInViewContainer(
+      'ingestion',
+      <IngestionView
+        taskGroupId={this.taskGroupId}
+        datasourceId={this.datasource}
+        openDialog={this.openDialog}
+        goToDatasource={this.goToDatasources}
+        goToQuery={this.goToQuery}
+        goToMiddleManager={this.goToMiddleManager}
+        goToLoadData={this.goToLoadData}
+        capabilities={capabilities}
+      />,
+    );
+  };
+
+  private wrappedServicesView = () => {
+    const { capabilities } = this.state;
+    return this.wrapInViewContainer(
+      'services',
+      <ServicesView
+        middleManager={this.middleManager}
+        goToQuery={this.goToQuery}
+        goToTask={this.goToIngestionWithTaskGroupId}
+        capabilities={capabilities}
+      />,
+    );
+  };
+
+  private wrappedLookupsView = () => {
+    return this.wrapInViewContainer('lookups', <LookupsView />);
+  };
+
+  render(): JSX.Element {
+    const { capabilitiesLoading } = this.state;
+
+    if (capabilitiesLoading) {
+      return (
+        <div className="loading-capabilities">
+          <Loader loadingText="" loading />
+        </div>
+      );
+    }
+
+    return (
+      <HashRouter hashType="noslash">
+        <div className="console-application">
+          <Switch>
+            <Route path="/load-data" component={this.wrappedLoadDataView} />
+
+            <Route path="/ingestion" component={this.wrappedIngestionView} />
+            <Route path="/datasources" component={this.wrappedDatasourcesView} />
+            <Route path="/segments" component={this.wrappedSegmentsView} />
+            <Route path="/services" component={this.wrappedServicesView} />
+
+            <Route path="/query" component={this.wrappedQueryView} />
+
+            <Route path="/lookups" component={this.wrappedLookupsView} />
+            <Route component={this.wrappedHomeView} />
+          </Switch>
+        </div>
+      </HashRouter>
+    );
   }
 }

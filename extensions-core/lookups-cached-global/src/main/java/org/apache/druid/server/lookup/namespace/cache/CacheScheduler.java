@@ -26,6 +26,7 @@ import org.apache.druid.concurrent.ConcurrentAwaitableCounter;
 import org.apache.druid.guice.LazySingleton;
 import org.apache.druid.java.util.common.Cleaners;
 import org.apache.druid.java.util.common.ISE;
+import org.apache.druid.java.util.common.Pair;
 import org.apache.druid.java.util.common.StringUtils;
 import org.apache.druid.java.util.common.logger.Logger;
 import org.apache.druid.java.util.emitter.service.ServiceEmitter;
@@ -35,8 +36,10 @@ import org.apache.druid.query.lookup.namespace.ExtractionNamespace;
 
 import javax.annotation.Nullable;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -55,8 +58,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   // the cache is not yet created, or already closed
  * } else {
  *   Map<String, String> cache = ((VersionedCache) cacheState).getCache(); // use the cache
- *   // Although VersionedCache implements AutoCloseable, versionedCache shouldn't be manually closed
- *   // when obtained from entry.getCacheState(). If the namespace updates should be ceased completely,
+ *   // If the namespace updates should be ceased completely,
  *   // entry.close() (see below) should be called, it will close the last VersionedCache as well.
  *   // On scheduled updates, outdated VersionedCaches are also closed automatically.
  * }
@@ -197,6 +199,34 @@ public final class CacheScheduler
       }
     }
 
+    /**
+     *
+     *
+     * @param entryId an object uniquely corresponding to the {@link CacheScheduler.Entry},
+     *                to create Cache from
+     * @param version version, associated with the cache
+     * @param newCacheEntries  List of Pairs consisting of new cache entries to be added to current Cache.
+     * @return a new {@link VersionedCache} by adding pairs to existing cache, This operation is
+     * non atomic and for Off-Heap caches there's possibility this will lead to a crash, in case
+     * of use-after-free.
+     */
+    public @Nullable VersionedCache createFromExistingCache(
+        @Nullable EntryImpl<? extends ExtractionNamespace> entryId,
+        String version,
+        List<Pair<String, String>> newCacheEntries
+    )
+    {
+      if (!(cacheStateHolder.get() instanceof VersionedCache)) {
+        return null;
+      }
+      VersionedCache state = (VersionedCache) cacheStateHolder.get();
+      ConcurrentMap<String, String> cache = state.cacheHandler.getCache();
+      for (Pair<String, String> pair : newCacheEntries) {
+        cache.put(pair.lhs, pair.rhs);
+      }
+      return createVersionedCache(entryId, version, state.cacheHandler).getVersionedCache();
+    }
+
     private void updateCache()
     {
       try {
@@ -275,6 +305,7 @@ public final class CacheScheduler
       CacheState lastCacheState;
       // CAS loop
       do {
+
         lastCacheState = cacheStateHolder.get();
         if (lastCacheState == NoCache.ENTRY_CLOSED) {
           return lastCacheState;
@@ -381,17 +412,59 @@ public final class CacheScheduler
     ENTRY_CLOSED
   }
 
-  public final class VersionedCache implements CacheState, AutoCloseable
+  /**
+   * This builder class holds a {@link VersionedCache} object,
+   * For handling failures while loading cache, it exposes close() method which will close {@link CacheHandler}
+   */
+  public final class VersionedCacheBuilder
+  {
+
+    public VersionedCache getVersionedCache()
+    {
+      return versionedCache;
+    }
+
+    private final VersionedCache versionedCache;
+
+    public VersionedCacheBuilder(
+        @Nullable EntryImpl<? extends ExtractionNamespace> entryId,
+        String version,
+        @Nullable CacheHandler cacheHandler
+    )
+    {
+      updatesStarted.incrementAndGet();
+      this.versionedCache = new VersionedCache(String.valueOf(entryId), version, cacheHandler);
+    }
+
+    public void close()
+    {
+      if (versionedCache != null) {
+        versionedCache.cacheHandler.close();
+        // Log statement after cacheHandler.close(), because logging may fail (e. g. in shutdown hooks)
+        log.debug("Closed version [%s] of %s", versionedCache.version, versionedCache.entryId);
+      }
+    }
+
+  }
+
+  public final class VersionedCache implements CacheState
   {
     final String entryId;
     final CacheHandler cacheHandler;
     final String version;
+    final boolean incremental;
 
-    private VersionedCache(String entryId, String version)
+    /**
+     * If {@link CacheHandler} cacheHandler is not null,
+     * new VersionedCache would reference the cacheHandler, cacheHandler object would never be closed
+     * and stay in memory forever. This way, we can support addition of new cache entries to same cacheHandler object.
+     */
+    private VersionedCache(String entryId, String version, @Nullable CacheHandler cacheHandler)
     {
       this.entryId = entryId;
-      this.cacheHandler = cacheManager.createCache();
+      this.cacheHandler = (cacheHandler == null) ? cacheManager.createCache() : cacheHandler;
       this.version = version;
+      this.incremental = cacheHandler != null;
     }
 
     public Map<String, String> getCache()
@@ -404,12 +477,18 @@ public final class CacheScheduler
       return version;
     }
 
-    @Override
-    public void close()
+    private void close()
     {
-      cacheHandler.close();
-      // Log statement after cacheHandler.close(), because logging may fail (e. g. in shutdown hooks)
-      log.debug("Closed version [%s] of %s", version, entryId);
+      // ideally, close shouldn't be called by users of VersionedCache in case of a incremental load,
+      // we do not close cacheHandler for such case.
+      if (this.incremental) {
+        log.debug("VersionedCache is of type incremental load, thus not closing cacheHandler " +
+            "version [%s] of %s", version, entryId);
+      } else {
+        cacheHandler.close();
+        // Log statement after cacheHandler.close(), because logging may fail (e. g. in shutdown hooks)
+        log.debug("Closed version [%s] of %s", version, entryId);
+      }
     }
   }
 
@@ -460,16 +539,21 @@ public final class CacheScheduler
 
   /**
    * This method should be used from {@link CacheGenerator#generateCache} implementations, to obtain a {@link
-   * VersionedCache} to be returned.
+   * VersionedCacheBuilder} to be returned.
    *
    * @param entryId an object uniquely corresponding to the {@link CacheScheduler.Entry}, for which VersionedCache is
    *                created
    * @param version version, associated with the cache
+   * @param cacheHandler {@link CacheHandler} object to create {@link VersionedCache} from, used for incremental load
    */
-  public VersionedCache createVersionedCache(@Nullable EntryImpl<? extends ExtractionNamespace> entryId, String version)
+  public VersionedCacheBuilder createVersionedCache(
+      @Nullable EntryImpl<? extends ExtractionNamespace> entryId,
+      String version,
+      @Nullable CacheHandler cacheHandler
+  )
   {
     updatesStarted.incrementAndGet();
-    return new VersionedCache(String.valueOf(entryId), version);
+    return new VersionedCacheBuilder(entryId, version, cacheHandler);
   }
 
   @VisibleForTesting

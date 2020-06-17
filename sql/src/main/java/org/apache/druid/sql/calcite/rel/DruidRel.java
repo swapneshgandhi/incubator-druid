@@ -19,12 +19,6 @@
 
 package org.apache.druid.sql.calcite.rel;
 
-import org.apache.calcite.DataContext;
-import org.apache.calcite.interpreter.BindableRel;
-import org.apache.calcite.interpreter.Node;
-import org.apache.calcite.interpreter.Row;
-import org.apache.calcite.interpreter.Sink;
-import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.AbstractRelNode;
@@ -32,9 +26,9 @@ import org.apache.druid.java.util.common.guava.Sequence;
 import org.apache.druid.sql.calcite.planner.PlannerContext;
 
 import javax.annotation.Nullable;
-import java.util.List;
+import java.util.Set;
 
-public abstract class DruidRel<T extends DruidRel> extends AbstractRelNode implements BindableRel
+public abstract class DruidRel<T extends DruidRel> extends AbstractRelNode
 {
   private final QueryMaker queryMaker;
 
@@ -74,36 +68,27 @@ public abstract class DruidRel<T extends DruidRel> extends AbstractRelNode imple
   }
 
   /**
-   * Convert this DruidRel to a DruidQuery. This may be an expensive operation. For example, DruidSemiJoin needs to
-   * execute the right-hand side query in order to complete this method.
+   * Convert this DruidRel to a DruidQuery. This must be an inexpensive operation, since it is done often throughout
+   * query planning.
    *
-   * This method may return null if it knows that this rel will yield an empty result set.
+   * This method must not return null.
    *
    * @param finalizeAggregations true if this query should include explicit finalization for all of its
    *                             aggregators, where required. Useful for subqueries where Druid's native query layer
    *                             does not do this automatically.
    *
-   * @return query, or null if it is known in advance that this rel will yield an empty result set.
-   *
    * @throws CannotBuildQueryException
    */
-  @Nullable
   public abstract DruidQuery toDruidQuery(boolean finalizeAggregations);
 
   /**
-   * Convert this DruidRel to a DruidQuery for purposes of explaining. This must be an inexpensive operation. For
-   * example, DruidSemiJoin will use a dummy dataSource in order to complete this method, rather than executing
-   * the right-hand side query.
+   * Convert this DruidRel to a DruidQuery for purposes of explaining. This must be an inexpensive operation.
    *
-   * This method may not return null.
-   *
-   * @return query
+   * This method must not return null.
    *
    * @throws CannotBuildQueryException
    */
   public abstract DruidQuery toDruidQueryForExplaining();
-
-  public abstract T asBindable();
 
   public QueryMaker getQueryMaker()
   {
@@ -118,37 +103,7 @@ public abstract class DruidRel<T extends DruidRel> extends AbstractRelNode imple
   public abstract T asDruidConvention();
 
   /**
-   * Get a list of names of datasources read by this DruidRel
+   * Get the set of names of table datasources read by this DruidRel
    */
-  public abstract List<String> getDataSourceNames();
-
-  @Override
-  public Class<Object[]> getElementType()
-  {
-    return Object[].class;
-  }
-
-  @Override
-  public Node implement(InterpreterImplementor implementor)
-  {
-    final Sink sink = implementor.compiler.sink(this);
-    return () -> runQuery().accumulate(
-        sink,
-        (Sink theSink, Object[] in) -> {
-          try {
-            theSink.send(Row.of(in));
-          }
-          catch (InterruptedException e) {
-            throw new RuntimeException(e);
-          }
-          return theSink;
-        }
-    );
-  }
-
-  @Override
-  public Enumerable<Object[]> bind(final DataContext dataContext)
-  {
-    throw new UnsupportedOperationException();
-  }
+  public abstract Set<String> getDataSourceNames();
 }

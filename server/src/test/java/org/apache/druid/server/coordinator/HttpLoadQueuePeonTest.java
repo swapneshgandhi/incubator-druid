@@ -81,9 +81,6 @@ public class HttpLoadQueuePeonTest
       null,
       null,
       10,
-      null,
-      false,
-      false,
       Duration.ZERO
   )
   {

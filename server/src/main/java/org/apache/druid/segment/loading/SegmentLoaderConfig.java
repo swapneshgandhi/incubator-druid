@@ -20,8 +20,9 @@
 package org.apache.druid.segment.loading;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
-import org.apache.druid.java.util.common.ISE;
+import org.apache.druid.utils.JvmUtils;
 import org.hibernate.validator.constraints.NotEmpty;
 
 import java.io.File;
@@ -36,6 +37,9 @@ public class SegmentLoaderConfig
   @NotEmpty
   private List<StorageLocationConfig> locations = null;
 
+  @JsonProperty("lazyLoadOnStart")
+  private boolean lazyLoadOnStart = false;
+
   @JsonProperty("deleteOnRemove")
   private boolean deleteOnRemove = true;
 
@@ -46,10 +50,13 @@ public class SegmentLoaderConfig
   private int announceIntervalMillis = 0; // do not background announce
 
   @JsonProperty("numLoadingThreads")
-  private int numLoadingThreads = 10;
+  private int numLoadingThreads = JvmUtils.getRuntimeInfo().getAvailableProcessors();
 
   @JsonProperty("numBootstrapThreads")
   private Integer numBootstrapThreads = null;
+
+  @JsonProperty("locationSelectorStrategy")
+  private StorageLocationSelectorStrategy locationSelectorStrategy;
 
   @JsonProperty
   private File infoDir = null;
@@ -60,6 +67,11 @@ public class SegmentLoaderConfig
   public List<StorageLocationConfig> getLocations()
   {
     return locations;
+  }
+
+  public boolean isLazyLoadOnStart()
+  {
+    return lazyLoadOnStart;
   }
 
   public boolean isDeleteOnRemove()
@@ -87,16 +99,20 @@ public class SegmentLoaderConfig
     return numBootstrapThreads == null ? numLoadingThreads : numBootstrapThreads;
   }
 
+  public StorageLocationSelectorStrategy getStorageLocationSelectorStrategy(List<StorageLocation> storageLocations)
+  {
+    if (locationSelectorStrategy == null) {
+      // default strategy if no strategy is specified in the config
+      locationSelectorStrategy = new LeastBytesUsedStorageLocationSelectorStrategy(storageLocations);
+    }
+    return locationSelectorStrategy;
+  }
+
   public File getInfoDir()
   {
     if (infoDir == null) {
-
-      if (locations == null || locations.size() == 0) {
-        throw new ISE("You have no segment cache locations defined. Please configure druid.segmentCache.locations to use one or more locations.");
-      }
       infoDir = new File(locations.get(0).getPath(), "info_dir");
     }
-
     return infoDir;
   }
 
@@ -114,6 +130,13 @@ public class SegmentLoaderConfig
     return retVal;
   }
 
+  @VisibleForTesting
+  SegmentLoaderConfig withStorageLocationSelectorStrategy(StorageLocationSelectorStrategy strategy)
+  {
+    this.locationSelectorStrategy = strategy;
+    return this;
+  }
+
   @Override
   public String toString()
   {
@@ -121,6 +144,7 @@ public class SegmentLoaderConfig
            "locations=" + locations +
            ", deleteOnRemove=" + deleteOnRemove +
            ", dropSegmentDelayMillis=" + dropSegmentDelayMillis +
+           ", locationSelectorStrategy=" + locationSelectorStrategy +
            ", infoDir=" + infoDir +
            '}';
   }

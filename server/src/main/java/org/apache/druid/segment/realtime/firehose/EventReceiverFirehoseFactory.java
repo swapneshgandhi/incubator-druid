@@ -49,8 +49,6 @@ import org.apache.druid.server.security.AuthorizationUtils;
 import org.apache.druid.server.security.AuthorizerMapper;
 import org.apache.druid.server.security.Resource;
 import org.apache.druid.server.security.ResourceAction;
-import org.apache.druid.server.security.ResourceType;
-import org.apache.druid.utils.Runnables;
 import org.joda.time.DateTime;
 
 import javax.annotation.Nullable;
@@ -105,7 +103,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
    * {@link EventReceiverFirehose} that may change in the future.
    */
   private final long maxIdleTimeMillis;
-  private final @Nullable ChatHandlerProvider chatHandlerProvider;
+  private final ChatHandlerProvider chatHandlerProvider;
   private final ObjectMapper jsonMapper;
   private final ObjectMapper smileMapper;
   private final EventReceiverFirehoseRegister eventReceiverFirehoseRegister;
@@ -116,7 +114,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
       @JsonProperty("serviceName") String serviceName,
       @JsonProperty("bufferSize") Integer bufferSize,
       // Keeping the legacy 'maxIdleTime' property name for backward compatibility. When the project is updated to
-      // Jackson 2.9 it could be changed, see https://github.com/apache/incubator-druid/issues/7152
+      // Jackson 2.9 it could be changed, see https://github.com/apache/druid/issues/7152
       @JsonProperty("maxIdleTime") @Nullable Long maxIdleTimeMillis,
       @JacksonInject ChatHandlerProvider chatHandlerProvider,
       @JacksonInject @Json ObjectMapper jsonMapper,
@@ -176,7 +174,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
 
   /**
    * Keeping the legacy 'maxIdleTime' property name for backward compatibility. When the project is updated to Jackson
-   * 2.9 it could be changed, see https://github.com/apache/incubator-druid/issues/7152
+   * 2.9 it could be changed, see https://github.com/apache/druid/issues/7152
    */
   @JsonProperty("maxIdleTime")
   public long getMaxIdleTimeMillis()
@@ -226,6 +224,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
      * This field and {@link #rowsRunOut} are not volatile because they are accessed only from {@link #hasMore()} and
      * {@link #nextRow()} methods that are called from a single thread according to {@link Firehose} spec.
      */
+    @Nullable
     private InputRow nextRow = null;
     private boolean rowsRunOut = false;
 
@@ -242,7 +241,9 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
      * If they were not volatile, NPE would be possible in {@link #delayedCloseExecutor}. See
      * https://shipilev.net/blog/2016/close-encounters-of-jmm-kind/#wishful-hb-actual for explanations.
      */
+    @Nullable
     private volatile Long idleCloseTimeNs = null;
+    @Nullable
     private volatile Long requestedShutdownTimeNs = null;
 
     EventReceiverFirehose(InputRowParser<Map<String, Object>> parser)
@@ -301,7 +302,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
                 // we long the error and continue a loop after some pause.
                 log.error(
                     "Either idleCloseTimeNs or requestedShutdownTimeNs must be non-null. "
-                    + "Please file a bug at https://github.com/apache/incubator-druid/issues"
+                    + "Please file a bug at https://github.com/apache/druid/issues"
                 );
               }
               if (idleCloseTimeNs != null && idleCloseTimeNs - System.nanoTime() <= 0) { // overflow-aware comparison
@@ -349,7 +350,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
       Access accessResult = AuthorizationUtils.authorizeResourceAction(
           req,
           new ResourceAction(
-              new Resource("STATE", ResourceType.STATE),
+              Resource.STATE_RESOURCE,
               Action.WRITE
           ),
           authorizerMapper
@@ -447,12 +448,6 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
     }
 
     @Override
-    public Runnable commit()
-    {
-      return Runnables.getNoopRunnable();
-    }
-
-    @Override
     public int getCurrentBufferSize()
     {
       return buffer.size();
@@ -538,7 +533,7 @@ public class EventReceiverFirehoseFactory implements FirehoseFactory<InputRowPar
       Access accessResult = AuthorizationUtils.authorizeResourceAction(
           req,
           new ResourceAction(
-              new Resource("STATE", ResourceType.STATE),
+              Resource.STATE_RESOURCE,
               Action.WRITE
           ),
           authorizerMapper

@@ -22,7 +22,6 @@ package org.apache.druid.sql.calcite.rel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-import org.apache.calcite.interpreter.BindableConvention;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptCost;
 import org.apache.calcite.plan.RelOptPlanner;
@@ -37,13 +36,15 @@ import org.apache.druid.java.util.common.guava.Sequence;
 import org.apache.druid.java.util.common.guava.Sequences;
 import org.apache.druid.query.QueryDataSource;
 import org.apache.druid.query.TableDataSource;
-import org.apache.druid.sql.calcite.table.RowSignature;
+import org.apache.druid.query.groupby.GroupByQuery;
+import org.apache.druid.segment.column.RowSignature;
+import org.apache.druid.sql.calcite.table.RowSignatures;
 
-import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Set;
 
 /**
- * DruidRel that uses a "query" dataSource.
+ * DruidRel that uses a {@link QueryDataSource}.
  */
 public class DruidOuterQueryRel extends DruidRel<DruidOuterQueryRel>
 {
@@ -118,20 +119,21 @@ public class DruidOuterQueryRel extends DruidRel<DruidOuterQueryRel>
     return 1 + ((DruidRel) sourceRel).getQueryCount();
   }
 
-  @Nullable
   @Override
   public DruidQuery toDruidQuery(final boolean finalizeAggregations)
   {
     // Must finalize aggregations on subqueries.
 
     final DruidQuery subQuery = ((DruidRel) sourceRel).toDruidQuery(true);
-    if (subQuery == null) {
-      return null;
+
+    final GroupByQuery groupByQuery = subQuery.toGroupByQuery();
+    if (groupByQuery == null) {
+      throw new CannotBuildQueryException("Subquery could not be converted to GroupBy query");
     }
 
     final RowSignature sourceRowSignature = subQuery.getOutputRowSignature();
     return partialQuery.build(
-        new QueryDataSource(subQuery.toGroupByQuery()),
+        new QueryDataSource(groupByQuery),
         sourceRowSignature,
         getPlannerContext(),
         getCluster().getRexBuilder(),
@@ -144,25 +146,13 @@ public class DruidOuterQueryRel extends DruidRel<DruidOuterQueryRel>
   {
     return partialQuery.build(
         DUMMY_DATA_SOURCE,
-        RowSignature.from(
+        RowSignatures.fromRelDataType(
             sourceRel.getRowType().getFieldNames(),
             sourceRel.getRowType()
         ),
         getPlannerContext(),
         getCluster().getRexBuilder(),
         false
-    );
-  }
-
-  @Override
-  public DruidOuterQueryRel asBindable()
-  {
-    return new DruidOuterQueryRel(
-        getCluster(),
-        getTraitSet().plus(BindableConvention.INSTANCE),
-        sourceRel,
-        partialQuery,
-        getQueryMaker()
     );
   }
 
@@ -206,9 +196,9 @@ public class DruidOuterQueryRel extends DruidRel<DruidOuterQueryRel>
   }
 
   @Override
-  public List<String> getDataSourceNames()
+  public Set<String> getDataSourceNames()
   {
-    return ((DruidRel) sourceRel).getDataSourceNames();
+    return ((DruidRel<?>) sourceRel).getDataSourceNames();
   }
 
   @Override
@@ -239,6 +229,8 @@ public class DruidOuterQueryRel extends DruidRel<DruidOuterQueryRel>
   @Override
   public RelOptCost computeSelfCost(final RelOptPlanner planner, final RelMetadataQuery mq)
   {
-    return planner.getCostFactory().makeCost(mq.getRowCount(sourceRel), 0, 0).multiplyBy(10);
+    return planner.getCostFactory()
+                  .makeCost(partialQuery.estimateCost(), 0, 0)
+                  .multiplyBy(CostEstimates.MULTIPLIER_OUTER_QUERY);
   }
 }

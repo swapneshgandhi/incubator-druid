@@ -21,7 +21,6 @@ package org.apache.druid.indexing.overlord.supervisor;
 
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.util.List;
 
@@ -45,16 +44,32 @@ public interface SupervisorSpec
 
   default SupervisorSpec createSuspendedSpec()
   {
-    throw new NotImplementedException();
+    throw new UnsupportedOperationException();
   }
 
   default SupervisorSpec createRunningSpec()
   {
-    throw new NotImplementedException();
+    throw new UnsupportedOperationException();
   }
 
   default boolean isSuspended()
   {
     return false;
   }
+
+  /**
+   * This API is only used for informational purposes in
+   * org.apache.druid.sql.calcite.schema.SystemSchema.SupervisorsTable
+   *
+   * @return supervisor type
+   */
+  String getType();
+
+  /**
+   * This API is only used for informational purposes in
+   * org.apache.druid.sql.calcite.schema.SystemSchema.SupervisorsTable
+   *
+   * @return source like stream or topic name
+   */
+  String getSource();
 }

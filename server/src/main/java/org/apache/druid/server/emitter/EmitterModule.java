@@ -19,6 +19,7 @@
 
 package org.apache.druid.server.emitter;
 
+import com.google.common.base.Strings;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableMap;
 import com.google.inject.Binder;
@@ -50,6 +51,7 @@ import java.util.Map;
 import java.util.Properties;
 
 /**
+ *
  */
 public class EmitterModule implements Module
 {
@@ -100,8 +102,7 @@ public class EmitterModule implements Module
   )
   {
     final DruidNode config = configSupplier.get();
-    log.info("Underlying emitter for ServiceEmitter: %s", emitter);
-    log.info("Extra service dimensions: %s", extraServiceDimensions);
+    log.info("Using emitter [%s] for metrics and alerts, with dimensions [%s].", emitter, extraServiceDimensions);
     final ServiceEmitter retVal = new ServiceEmitter(
         config.getServiceName(),
         config.getHostAndPortToUse(),
@@ -128,15 +129,18 @@ public class EmitterModule implements Module
     @Inject
     public void inject(Injector injector)
     {
-      final List<Binding<Emitter>> emitterBindings = injector.findBindingsByType(new TypeLiteral<Emitter>(){});
+      final List<Binding<Emitter>> emitterBindings = injector.findBindingsByType(new TypeLiteral<Emitter>() {});
 
-      emitter = findEmitter(emitterType, emitterBindings);
-
-      if (emitter == null) {
+      if (Strings.isNullOrEmpty(emitterType)) {
+        // If the emitter is unspecified, we want to default to the no-op emitter. Include empty string here too, just
+        // in case nulls are translated to empty strings at some point somewhere in the system.
         emitter = findEmitter(NoopEmitterModule.EMITTER_TYPE, emitterBindings);
+      } else {
+        emitter = findEmitter(emitterType, emitterBindings);
       }
 
       if (emitter == null) {
+        // If the requested emitter couldn't be found, throw an error. It might mean a typo, or a missing extension.
         List<String> knownTypes = new ArrayList<>();
         for (Binding<Emitter> binding : emitterBindings) {
           final Annotation annotation = binding.getKey().getAnnotation();

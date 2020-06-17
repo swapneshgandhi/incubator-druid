@@ -65,6 +65,9 @@ public class CloseableIterators
       @Override
       public boolean hasNext()
       {
+        if (closed) {
+          return false;
+        }
         return innerIterator.hasNext();
       }
 
@@ -92,5 +95,7 @@ public class CloseableIterators
     return wrap(innerIterator, null);
   }
 
-  private CloseableIterators() {}
+  private CloseableIterators()
+  {
+  }
 }

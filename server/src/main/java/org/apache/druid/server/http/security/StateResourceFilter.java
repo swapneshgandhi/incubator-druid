@@ -27,7 +27,6 @@ import org.apache.druid.server.security.AuthorizerMapper;
 import org.apache.druid.server.security.ForbiddenException;
 import org.apache.druid.server.security.Resource;
 import org.apache.druid.server.security.ResourceAction;
-import org.apache.druid.server.security.ResourceType;
 
 /**
  * Use this ResourceFilter at end points where Druid Cluster State is read or written
@@ -47,9 +46,7 @@ import org.apache.druid.server.security.ResourceType;
 public class StateResourceFilter extends AbstractResourceFilter
 {
   @Inject
-  public StateResourceFilter(
-      AuthorizerMapper authorizerMapper
-  )
+  public StateResourceFilter(AuthorizerMapper authorizerMapper)
   {
     super(authorizerMapper);
   }
@@ -58,7 +55,7 @@ public class StateResourceFilter extends AbstractResourceFilter
   public ContainerRequest filter(ContainerRequest request)
   {
     final ResourceAction resourceAction = new ResourceAction(
-        new Resource("STATE", ResourceType.STATE),
+        Resource.STATE_RESOURCE,
         getAction(request)
     );
 

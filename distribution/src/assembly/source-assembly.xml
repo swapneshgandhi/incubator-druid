@@ -47,6 +47,7 @@
                 <exclude>.gitignore</exclude>
                 <exclude>.dockerignore</exclude>
                 <exclude>.travis.yml</exclude>
+                <exclude>README.md</exclude>
                 <exclude>README.BINARY</exclude>
                 <exclude>publications/**</exclude>
                 <exclude>upload.sh</exclude>
@@ -54,7 +55,6 @@
                 <exclude>web-console/node/**</exclude>
                 <exclude>web-console/resources/**</exclude>
                 <exclude>web-console/public/**</exclude>
-                <exclude>web-console/assets/**</exclude>
                 <exclude>web-console/lib/*.css</exclude>
                 <exclude>web-console/coordinator-console/**</exclude>
                 <exclude>web-console/pages/**</exclude>
@@ -68,7 +68,7 @@
             <directory>${project.build.directory}</directory>
             <includes>
                 <include>git.version</include>
-                <include>README.md</include>
+                <include>README</include>
             </includes>
             <outputDirectory/>
         </fileSet>

@@ -21,7 +21,6 @@ package org.apache.druid.sql.calcite.rel;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.FluentIterable;
-import org.apache.calcite.interpreter.BindableConvention;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptCost;
 import org.apache.calcite.plan.RelOptPlanner;
@@ -38,6 +37,7 @@ import org.apache.druid.java.util.common.guava.Sequences;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class DruidUnionRel extends DruidRel<DruidUnionRel>
@@ -115,7 +115,6 @@ public class DruidUnionRel extends DruidRel<DruidUnionRel>
     throw new UnsupportedOperationException();
   }
 
-  @Nullable
   @Override
   public DruidQuery toDruidQuery(final boolean finalizeAggregations)
   {
@@ -126,19 +125,6 @@ public class DruidUnionRel extends DruidRel<DruidUnionRel>
   public DruidQuery toDruidQueryForExplaining()
   {
     throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public DruidUnionRel asBindable()
-  {
-    return new DruidUnionRel(
-        getCluster(),
-        getTraitSet().replace(BindableConvention.INSTANCE),
-        getQueryMaker(),
-        rowType,
-        rels.stream().map(rel -> RelOptRule.convert(rel, BindableConvention.INSTANCE)).collect(Collectors.toList()),
-        limit
-    );
   }
 
   @Override
@@ -180,12 +166,11 @@ public class DruidUnionRel extends DruidRel<DruidUnionRel>
   }
 
   @Override
-  public List<String> getDataSourceNames()
+  public Set<String> getDataSourceNames()
   {
     return rels.stream()
                .flatMap(rel -> ((DruidRel<?>) rel).getDataSourceNames().stream())
-               .distinct()
-               .collect(Collectors.toList());
+               .collect(Collectors.toSet());
   }
 
   @Override
@@ -209,7 +194,7 @@ public class DruidUnionRel extends DruidRel<DruidUnionRel>
   @Override
   public RelOptCost computeSelfCost(final RelOptPlanner planner, final RelMetadataQuery mq)
   {
-    return planner.getCostFactory().makeCost(rels.stream().mapToDouble(mq::getRowCount).sum(), 0, 0);
+    return planner.getCostFactory().makeCost(CostEstimates.COST_BASE, 0, 0);
   }
 
   public int getLimit()
